@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
-import { Search, X, FolderOpen, Loader as Loader2, Heart, Trash2, Menu, Music as MusicIcon, TrendingUp, RefreshCw } from 'lucide-react';
+import { Search, X, FolderOpen, Loader as Loader2, Heart, Trash2, Menu, Music as MusicIcon, TrendingUp, RefreshCw, Plus } from 'lucide-react';
 
 import { Onboarding } from './components/Onboarding';
 import { Sidebar } from './components/Sidebar';
@@ -11,6 +11,7 @@ import { SettingsPanel } from './components/SettingsPanel';
 import { AlbumArtEditModal } from './components/AlbumArtEditModal';
 import { QueuePanel } from './components/QueuePanel';
 import { StatsScreen } from './components/StatsScreen';
+import { AddSongsModal } from './components/AddSongsModal';
 
 import { usePlayer } from './hooks/usePlayer';
 import { player } from './lib/player';
@@ -132,6 +133,10 @@ export default function App() {
   const [editSong, setEditSong] = useState<Song | null>(null);
   const [showNewPlaylist, setShowNewPlaylist] = useState(false);
   const [newPlaylistSong, setNewPlaylistSong] = useState<Song | null>(null);
+  // Drives the AddSongsModal picker opened from the playlist detail
+  // toolbar's "Add Songs" button (Task 1). A boolean is enough -- the modal
+  // only ever targets whichever playlist is currently open (`currentPlaylist`).
+  const [showAddSongs, setShowAddSongs] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [history, setHistory] = useState<HistoryEntry[]>([]);
   const listRef = useRef<VirtualListHandle>(null);
@@ -254,6 +259,33 @@ export default function App() {
     showToast(`Added to "${pl.name}"`);
   }, [playlists]);
 
+  // Task 1: bulk-add handler for the new "Add Songs" playlist-toolbar
+  // button + AddSongsModal picker. Mirrors handleAddToPlaylist above but
+  // takes multiple song ids and performs a single savePlaylist() write
+  // instead of one per song -- consistent with the batching approach
+  // already used elsewhere in this codebase (see saveSongsBatch in
+  // lib/db.ts) to avoid one IndexedDB transaction per item.
+  // Data model: persistence reuses the existing Playlist.songIds string[]
+  // field and the existing savePlaylist()/IndexedDB 'playlists' store --
+  // no new storage layer or dependency was needed since playlist-song
+  // membership was already modeled and persisted this way.
+  const handleAddSongsToPlaylist = useCallback(async (songIds: string[]) => {
+    if (typeof view !== 'object' || view.type !== 'playlist') return;
+    const pl = playlists.find((p) => p.id === view.id);
+    if (!pl) return;
+    // Edge case (duplicates): dedupe against a Set so a song can never
+    // appear twice in songIds, even if it was somehow already added
+    // (e.g. via the per-song context menu) between opening the picker
+    // and confirming the selection.
+    const existing = new Set(pl.songIds);
+    const toAdd = songIds.filter((id) => !existing.has(id));
+    if (toAdd.length === 0) return;
+    const updated = { ...pl, songIds: [...pl.songIds, ...toAdd] };
+    await savePlaylist(updated);
+    setPlaylists((prev) => prev.map((p) => (p.id === pl.id ? updated : p)));
+    showToast(`Added ${toAdd.length} song${toAdd.length !== 1 ? 's' : ''} to "${pl.name}"`);
+  }, [view, playlists]);
+
   const handleCreatePlaylist = useCallback(async (name: string, forSong?: Song) => {
     const pl: Playlist = { id: `pl-${Date.now()}-${Math.random().toString(36).slice(2)}`, name, songIds: forSong ? [forSong.id] : [], createdAt: Date.now() };
     await savePlaylist(pl);
@@ -365,15 +397,13 @@ export default function App() {
       : result.scanned > 0 ? 'No art issues found' : 'Your library is empty');
   }, [songs]);
 
-  const handleLikeAll = useCallback(async () => {
-    if (typeof view !== 'object' || view.type !== 'playlist') return;
-    const pl = playlists.find((p) => p.id === view.id);
-    if (!pl) return;
-    const n = new Set(likedIds);
-    for (const id of pl.songIds) { if (!n.has(id)) { await dbSetLiked(id, true); n.add(id); } }
-    setLikedIds(n);
-    showToast(`Liked all songs in "${pl.name}"`);
-  }, [view, playlists, likedIds]);
+  // REMOVED (Task 2): the playlist-toolbar "Like all" bulk-like button and
+  // its handler (previously `handleLikeAll`) have been removed per request.
+  // This only touched the bulk control -- individual per-song like buttons
+  // (SongRow's `onLike`/`handleLike`) are untouched, and the unrelated
+  // "Add all to Liked Songs" library-view bulk button (`handleLikeAllInLibrary`
+  // below) is also untouched, since the request was specifically about the
+  // playlist view's bulk-like control.
 
   // Bulk-like every song in the full library. Reuses the existing
   // `likedIds` set / `dbSetLiked` model — no new data model needed.
@@ -604,9 +634,13 @@ export default function App() {
                 {/* Playlist toolbar */}
                 {currentPlaylist && (
                   <div className="flex items-center gap-2 px-4 py-2 shrink-0" style={{ borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
-                    <button onClick={handleLikeAll}
+                    {/* Task 1: opens the AddSongsModal picker, scoped to
+                        whichever playlist is currently open. Replaces the
+                        old "Like all" bulk button in this same toolbar slot
+                        (Task 2 removed it). */}
+                    <button onClick={() => setShowAddSongs(true)}
                       className="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-full bg-white/5 hover:bg-white/10 transition-colors" style={{ color: accentColor }}>
-                      <Heart size={13} fill={accentColor} style={{ color: accentColor }} /> Like all
+                      <Plus size={13} style={{ color: accentColor }} /> Add Songs
                     </button>
                     <button onClick={() => handleDeletePlaylist(currentPlaylist.id)}
                       className="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-full bg-white/5 hover:bg-red-500/15 hover:text-red-400 text-white/50 transition-colors">
@@ -739,6 +773,18 @@ export default function App() {
       )}
       {editSong && <AlbumArtEditModal song={editSong} accentColor={accentColor} onClose={() => setEditSong(null)} onUpdated={(u) => { handleSongUpdated(u); setEditSong(null); }} />}
       {showNewPlaylist && <NewPlaylistModal accentColor={accentColor} onCreated={(name) => handleCreatePlaylist(name, newPlaylistSong ?? undefined)} onClose={() => { setShowNewPlaylist(false); setNewPlaylistSong(null); }} />}
+      {/* Task 1: song picker for the playlist toolbar's "Add Songs" button.
+          Only rendered while a playlist is actually open, so `currentPlaylist`
+          is guaranteed non-null here. */}
+      {showAddSongs && currentPlaylist && (
+        <AddSongsModal
+          playlist={currentPlaylist}
+          songs={songs}
+          accentColor={accentColor}
+          onClose={() => setShowAddSongs(false)}
+          onConfirm={handleAddSongsToPlaylist}
+        />
+      )}
       {showQueueModal && (
         <div className="fixed inset-0 z-50 flex justify-end md:items-center md:justify-center"
           style={{ background: 'rgba(0,0,0,0.5)', backdropFilter: 'blur(4px)' }}
