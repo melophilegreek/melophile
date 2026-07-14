@@ -102,6 +102,46 @@ function NewPlaylistModal({ accentColor, onCreated, onClose }: {
   );
 }
 
+// Feature (Playlist delete confirmation): mirrors SongRow.tsx's
+// DeleteConfirmDialog exactly (same layout/styling/Escape-to-cancel
+// behavior) so deleting a playlist gets the same "are you sure" guard that
+// deleting a song already has, instead of the previous single-click
+// straight-to-delete button.
+function DeletePlaylistDialog({ playlist, onCancel, onConfirm }: {
+  playlist: Playlist; onCancel: () => void; onConfirm: () => void;
+}) {
+  useEffect(() => {
+    const h = (e: KeyboardEvent) => { if (e.key === 'Escape') onCancel(); };
+    window.addEventListener('keydown', h);
+    return () => window.removeEventListener('keydown', h);
+  }, [onCancel]);
+
+  return (
+    <div className="fixed inset-0 z-[1100] flex items-center justify-center px-4"
+      style={{ background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(8px)' }}
+      onMouseDown={(e) => { if (e.currentTarget === e.target) onCancel(); }}
+      onClick={(e) => e.stopPropagation()}>
+      <div className="w-full max-w-sm rounded-2xl p-6 shadow-2xl animate-slide-up"
+        style={{ background: 'rgba(28,28,28,0.97)', backdropFilter: 'blur(20px)', border: '1px solid rgba(255,255,255,0.1)', boxShadow: '0 8px 32px rgba(0,0,0,0.6)' }}>
+        <h3 className="text-white font-bold text-lg mb-2">Delete playlist?</h3>
+        <p className="text-white/50 text-sm mb-5 leading-snug">
+          <span className="text-white/80 font-medium">{playlist.name}</span> ({playlist.songIds.length} {playlist.songIds.length === 1 ? 'song' : 'songs'}) will be permanently deleted. Your songs themselves won't be removed from your library. This can't be undone.
+        </p>
+        <div className="flex gap-2">
+          <button onClick={onCancel}
+            className="flex-1 py-2.5 rounded-xl bg-white/5 hover:bg-white/10 text-white/70 text-sm transition-colors">
+            Cancel
+          </button>
+          <button onClick={onConfirm}
+            className="flex-1 py-2.5 rounded-xl bg-red-500/90 hover:bg-red-500 text-white font-semibold text-sm transition-colors">
+            Delete
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   const playerState = usePlayer();
   const listeningStats = useListeningStats();
@@ -134,6 +174,11 @@ export default function App() {
   const [showQueueModal, setShowQueueModal] = useState(false);
   const [editSong, setEditSong] = useState<Song | null>(null);
   const [showNewPlaylist, setShowNewPlaylist] = useState(false);
+  // Feature (Playlist delete confirmation): holds the playlist awaiting a
+  // "are you sure?" before it's actually deleted. Set by requestDeletePlaylist
+  // (wired to both the sidebar trash icon and the playlist toolbar's "Delete
+  // playlist" button); cleared on cancel or after the dialog's own confirm.
+  const [deletingPlaylist, setDeletingPlaylist] = useState<Playlist | null>(null);
   const [newPlaylistSong, setNewPlaylistSong] = useState<Song | null>(null);
   // Drives the AddSongsModal picker opened from the playlist detail
   // toolbar's "Add Songs" button (Task 1). A boolean is enough -- the modal
@@ -348,6 +393,15 @@ export default function App() {
     if (typeof view === 'object' && view.type === 'playlist' && view.id === id) setView('library');
     showToast('Playlist deleted');
   }, [view]);
+
+  // Feature (Playlist delete confirmation): the trash icon / toolbar button
+  // now call this instead of handleDeletePlaylist directly -- it just opens
+  // the confirm dialog. The dialog's onConfirm is what actually calls
+  // handleDeletePlaylist.
+  const requestDeletePlaylist = useCallback((id: string) => {
+    const pl = playlists.find((p) => p.id === id);
+    if (pl) setDeletingPlaylist(pl);
+  }, [playlists]);
 
   const handleRemoveFromPlaylist = useCallback(async (song: Song) => {
     if (typeof view !== 'object' || view.type !== 'playlist') return;
@@ -603,7 +657,7 @@ export default function App() {
               accentColor={accentColor}
               queueCount={playerState.userQueue.length}
               onCreatePlaylist={() => setShowNewPlaylist(true)}
-              onDeletePlaylist={handleDeletePlaylist}
+              onDeletePlaylist={requestDeletePlaylist}
               onOpenSettings={() => setShowSettings(true)}
             />
           </div>
@@ -695,7 +749,7 @@ export default function App() {
                       className="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-full bg-white/5 hover:bg-white/10 transition-colors" style={{ color: accentColor }}>
                       <Plus size={13} style={{ color: accentColor }} /> Add Songs
                     </button>
-                    <button onClick={() => handleDeletePlaylist(currentPlaylist.id)}
+                    <button onClick={() => requestDeletePlaylist(currentPlaylist.id)}
                       className="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-full bg-white/5 hover:bg-red-500/15 hover:text-red-400 text-white/50 transition-colors">
                       <Trash2 size={13} /> Delete playlist
                     </button>
@@ -849,6 +903,13 @@ export default function App() {
           accentColor={accentColor}
           onClose={() => setShowAddSongs(false)}
           onConfirm={handleAddSongsToPlaylist}
+        />
+      )}
+      {deletingPlaylist && (
+        <DeletePlaylistDialog
+          playlist={deletingPlaylist}
+          onCancel={() => setDeletingPlaylist(null)}
+          onConfirm={() => { handleDeletePlaylist(deletingPlaylist.id); setDeletingPlaylist(null); }}
         />
       )}
       {showQueueModal && (
