@@ -6,6 +6,7 @@ interface MelophileDB {
   songs: { key: string; value: Song };
   files: { key: string; value: Blob };
   'liked-songs': { key: string; value: string };
+  'pinned-songs': { key: string; value: string };
   playlists: { key: string; value: Playlist };
   preferences: { key: string; value: string };
   history: { key: string; value: HistoryEntry };
@@ -15,7 +16,10 @@ let _db: IDBPDatabase<MelophileDB> | null = null;
 
 async function getDB(): Promise<IDBPDatabase<MelophileDB>> {
   if (_db) return _db;
-  _db = await idbOpen<MelophileDB>('melophile', 3, {
+  // Bumped 3 -> 4 to add the 'pinned-songs' store (Pin/Unpin feature).
+  // Mirrors 'liked-songs' exactly: a store of songId -> songId, so
+  // getAllKeys() doubles as both the id list and the membership check.
+  _db = await idbOpen<MelophileDB>('melophile', 4, {
     upgrade(db, oldVersion) {
       if (!db.objectStoreNames.contains('songs')) {
         const s = db.createObjectStore('songs', { keyPath: 'id' });
@@ -28,6 +32,9 @@ async function getDB(): Promise<IDBPDatabase<MelophileDB>> {
       if (oldVersion < 3 && !db.objectStoreNames.contains('history')) {
         const h = db.createObjectStore('history', { keyPath: 'id' });
         h.createIndex('playedAt' as never, 'playedAt' as never);
+      }
+      if (oldVersion < 4 && !db.objectStoreNames.contains('pinned-songs')) {
+        db.createObjectStore('pinned-songs');
       }
     },
   });
@@ -76,11 +83,12 @@ export async function deleteSong(id: string, fileKey: string): Promise<void> {
 // decision, not a storage-layer one.
 export async function clearAllSongs(): Promise<void> {
   const db = await getDB();
-  const tx = db.transaction(['songs', 'files', 'liked-songs'], 'readwrite');
+  const tx = db.transaction(['songs', 'files', 'liked-songs', 'pinned-songs'], 'readwrite');
   await Promise.all([
     tx.objectStore('songs').clear(),
     tx.objectStore('files').clear(),
     tx.objectStore('liked-songs').clear(),
+    tx.objectStore('pinned-songs').clear(),
     tx.done,
   ]);
 }
@@ -90,6 +98,10 @@ export async function getFile(key: string): Promise<Blob | undefined> { const db
 // ── Liked Songs ───────────────────────────────────────────────────────────────
 export async function getLikedIds(): Promise<Set<string>> { const db = await getDB(); const keys = await db.getAllKeys('liked-songs'); return new Set(keys as string[]); }
 export async function setLiked(songId: string, liked: boolean): Promise<void> { const db = await getDB(); if (liked) await db.put('liked-songs', songId, songId); else await db.delete('liked-songs', songId); }
+
+// ── Pinned Songs ──────────────────────────────────────────────────────────────
+export async function getPinnedIds(): Promise<Set<string>> { const db = await getDB(); const keys = await db.getAllKeys('pinned-songs'); return new Set(keys as string[]); }
+export async function setPinned(songId: string, pinned: boolean): Promise<void> { const db = await getDB(); if (pinned) await db.put('pinned-songs', songId, songId); else await db.delete('pinned-songs', songId); }
 
 // ── Playlists ─────────────────────────────────────────────────────────────────
 export async function getPlaylists(): Promise<Playlist[]> { const db = await getDB(); const all = await db.getAll('playlists'); return all.sort((a, b) => a.createdAt - b.createdAt); }
