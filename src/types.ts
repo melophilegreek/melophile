@@ -52,3 +52,16 @@ export const AUDIO_EXTENSIONS = ['.mp3', '.flac', '.wav', '.ogg', '.opus', '.aac
 // selectable/tested elsewhere in the app.
 export const DEFAULT_ACCENT = '#2C5FCC';
 export const ROW_HEIGHT = 56;
+// Height of the "Pinned" section header row inserted above pinned songs in
+// the Library/Playlist views (Feature: Pin/Unpin). Deliberately shorter than
+// ROW_HEIGHT since it's a label, not a song row.
+export const PINNED_HEADER_HEIGHT = 32;
+
+// A row rendered by VirtualList in views that support pinned-song grouping
+// (Library, Playlist). `displayIndex` is the song's 0-based position within
+// the pinned-then-unpinned ordering, used for the row's numbered index label
+// -- kept separate from the row's raw position in this array so inserting
+// the header doesn't shift the numbers shown to the user.
+export type LibraryRow =
+  | { kind: 'header'; id: string; label: string }
+  | { kind: 'song'; song: Song; displayIndex: number };
