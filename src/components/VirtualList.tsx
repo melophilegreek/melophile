@@ -134,8 +134,8 @@ function VirtualListInner<T>(
   }, []);
 
   return (
-    <div className="relative h-full">
-      <div ref={containerRef} className={`overflow-y-auto no-native-scrollbar-mobile ${className ?? ''}`} onScroll={handleScroll}>
+    <div className={`relative h-full ${className ?? ''}`}>
+      <div ref={containerRef} className="absolute inset-0 overflow-y-auto no-native-scrollbar-mobile" onScroll={handleScroll}>
         <div style={{ height: totalHeight, position: 'relative' }}>
           <div style={{ position: 'absolute', top: offsets[startIdx] ?? 0, left: 0, right: 0 }}>
             {visibleItems.map((item, i) => {
