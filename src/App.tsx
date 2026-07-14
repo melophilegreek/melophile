@@ -17,6 +17,7 @@ import { usePlayer } from './hooks/usePlayer';
 import { player } from './lib/player';
 import {
   getAllSongs, getLikedIds, setLiked as dbSetLiked,
+  getPinnedIds, setPinned as dbSetPinned,
   getPlaylists, savePlaylist, deletePlaylist as dbDeletePlaylist,
   getPreferences, savePreferences,
   recordPlay, getHistory, clearHistory,
@@ -25,8 +26,8 @@ import {
 } from './lib/db';
 import { importFiles, getTitleArtistDuplicateIds, rescanMissingArt, type ImportProgress, type ArtRescanProgress } from './lib/scanner';
 import { useListeningStats } from './hooks/useListeningStats';
-import type { AppView, HistoryEntry, Playlist, Song } from './types';
-import { DEFAULT_ACCENT } from './types';
+import type { AppView, HistoryEntry, LibraryRow, Playlist, Song } from './types';
+import { DEFAULT_ACCENT, PINNED_HEADER_HEIGHT, ROW_HEIGHT } from './types';
 import { getContrastText } from './lib/color';
 
 const artUrlCache = new Map<string, string>();
@@ -109,6 +110,7 @@ export default function App() {
   const [query, setQuery] = useState('');
   const [view, setView] = useState<AppView>('library');
   const [likedIds, setLikedIds] = useState<Set<string>>(new Set());
+  const [pinnedIds, setPinnedIds] = useState<Set<string>>(new Set());
   const [playlists, setPlaylists] = useState<Playlist[]>([]);
   const [accentColor, setAccentColor] = useState(DEFAULT_ACCENT);
   const [toast, setToast] = useState<string | null>(null);
@@ -145,10 +147,10 @@ export default function App() {
   const rescanInputRef = useRef<HTMLInputElement>(null);
 
   const loadAll = useCallback(async () => {
-    const [allSongs, liked, pls, prefs, hist] = await Promise.all([
-      getAllSongs(), getLikedIds(), getPlaylists(), getPreferences(), getHistory(50),
+    const [allSongs, liked, pinned, pls, prefs, hist] = await Promise.all([
+      getAllSongs(), getLikedIds(), getPinnedIds(), getPlaylists(), getPreferences(), getHistory(50),
     ]);
-    setSongs(allSongs); setLikedIds(liked); setPlaylists(pls);
+    setSongs(allSongs); setLikedIds(liked); setPinnedIds(pinned); setPlaylists(pls);
     setAccentColor(prefs.accentColor); setHistory(hist); setLoading(false);
   }, []);
 
@@ -213,6 +215,31 @@ export default function App() {
     return viewSongs.filter((s) => s.title.toLowerCase().includes(q) || s.artist.toLowerCase().includes(q));
   }, [viewSongs, query]);
 
+  // Feature (Pin/Unpin): pinned songs float to the top of the Library and
+  // Playlist views specifically (per spec), set off by a "Pinned" section
+  // header row -- Liked Songs / Most Played keep their existing ordering
+  // (this doesn't touch them; pinning still shows the pin badge there via
+  // SongRow's isPinned prop, it just doesn't regroup those two views).
+  // `rows` is what VirtualList actually renders (song rows + optional
+  // header); `alphaSongs`/`alphaOffset` are the matching inputs for
+  // AlphaScrollBar, which needs the same pinned-then-unpinned order plus
+  // how many extra rows (the header) sit above the first song.
+  const supportsPinnedGrouping = view === 'library' || (typeof view === 'object' && view.type === 'playlist');
+  const { rows, alphaSongs, alphaOffset } = useMemo(() => {
+    if (!supportsPinnedGrouping || pinnedIds.size === 0) {
+      const songRows: LibraryRow[] = filtered.map((song, i) => ({ kind: 'song', song, displayIndex: i }));
+      return { rows: songRows, alphaSongs: filtered, alphaOffset: 0 };
+    }
+    const pinned = filtered.filter((s) => pinnedIds.has(s.id));
+    const unpinned = filtered.filter((s) => !pinnedIds.has(s.id));
+    const ordered = [...pinned, ...unpinned];
+    const songRows: LibraryRow[] = ordered.map((song, i) => ({ kind: 'song', song, displayIndex: i }));
+    const rows: LibraryRow[] = pinned.length > 0
+      ? [{ kind: 'header', id: '__pinned-header__', label: 'Pinned' }, ...songRows]
+      : songRows;
+    return { rows, alphaSongs: ordered, alphaOffset: pinned.length > 0 ? 1 : 0 };
+  }, [filtered, pinnedIds, supportsPinnedGrouping]);
+
   useEffect(() => {
     player.setLibrary(songs, viewSongs);
     if (songs.length > 0 && playerState.queue.length === 0) player.initQueue(songs);
@@ -232,6 +259,19 @@ export default function App() {
     setLikedIds((prev) => { const n = new Set(prev); if (nowLiked) n.add(song.id); else n.delete(song.id); return n; });
     showToast(nowLiked ? `Liked "${song.title}"` : `Removed from Liked Songs`);
   }, [likedIds]);
+
+  // Pin/Unpin (3-dot menu). Mirrors handleLike's persist-then-update-state
+  // shape exactly, using the same pattern as the existing Liked Songs
+  // toggle -- a dedicated IndexedDB store (see lib/db.ts's 'pinned-songs')
+  // plus local Set state. Updating pinnedIds re-derives `rows` below
+  // immediately, so the song jumps to/from the Pinned section without a
+  // restart.
+  const handlePin = useCallback(async (song: Song) => {
+    const nowPinned = !pinnedIds.has(song.id);
+    await dbSetPinned(song.id, nowPinned);
+    setPinnedIds((prev) => { const n = new Set(prev); if (nowPinned) n.add(song.id); else n.delete(song.id); return n; });
+    showToast(nowPinned ? `Pinned "${song.title}"` : `Unpinned "${song.title}"`);
+  }, [pinnedIds]);
 
   const handleQueue = useCallback((song: Song) => {
     player.addToQueue(song);
@@ -325,6 +365,10 @@ export default function App() {
       setLikedIds((prev) => { const n = new Set(prev); n.delete(song.id); return n; });
       await dbSetLiked(song.id, false);
     }
+    if (pinnedIds.has(song.id)) {
+      setPinnedIds((prev) => { const n = new Set(prev); n.delete(song.id); return n; });
+      await dbSetPinned(song.id, false);
+    }
 
     // Edge case: the song may still be referenced by one or more playlists.
     // Those stale ids would otherwise linger in storage forever (they're
@@ -342,7 +386,7 @@ export default function App() {
     player.removeSong(song.id);
 
     showToast(`Deleted "${song.title}"`);
-  }, [likedIds, playlists]);
+  }, [likedIds, pinnedIds, playlists]);
 
   // "Delete all songs" (Settings → Danger Zone): mirrors handleDeleteSong's
   // cleanup above but for the whole library at once, instead of looping
@@ -357,6 +401,7 @@ export default function App() {
 
     setSongs([]);
     setLikedIds(new Set());
+    setPinnedIds(new Set());
 
     // Playlists no longer reference any songs, but the playlists themselves
     // (their names) are left intact — same "keep the shell, drop the dead
@@ -692,20 +737,28 @@ export default function App() {
                     </div>
                   ) : (
                     <>
-                      <VirtualList ref={listRef} items={filtered} className="flex-1"
-                        renderItem={(song, i) => (
-                          <SongRow key={song.id} song={song} index={i}
-                            isCurrent={playerState.currentSong?.id === song.id}
+                      <VirtualList ref={listRef} items={rows} className="flex-1"
+                        getItemHeight={(row) => row.kind === 'header' ? PINNED_HEADER_HEIGHT : ROW_HEIGHT}
+                        renderItem={(row) => row.kind === 'header' ? (
+                          <div key={row.id} className="h-full flex items-end px-3 pb-1.5 text-[11px] font-semibold uppercase tracking-wider text-white/35"
+                            style={{ borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
+                            {row.label}
+                          </div>
+                        ) : (
+                          <SongRow key={row.song.id} song={row.song} index={row.displayIndex}
+                            isCurrent={playerState.currentSong?.id === row.song.id}
                             isPlaying={playerState.isPlaying}
-                            isLiked={likedIds.has(song.id)}
-                            isQueued={queuedIds.has(song.id)}
+                            isLiked={likedIds.has(row.song.id)}
+                            isPinned={pinnedIds.has(row.song.id)}
+                            isQueued={queuedIds.has(row.song.id)}
                             accentColor={accentColor}
                             playlists={playlists}
                             isInPlaylist={!!currentPlaylist}
                             showPlayCount={view === 'most-played'}
-                            isDuplicateTitleArtist={dupTitleArtistIds.has(song.id)}
+                            isDuplicateTitleArtist={dupTitleArtistIds.has(row.song.id)}
                             onPlay={handlePlay}
                             onLike={handleLike}
+                            onPin={handlePin}
                             onQueue={handleQueue}
                             onAddToPlaylist={handleAddToPlaylist}
                             onCreatePlaylist={(s) => { setNewPlaylistSong(s); setShowNewPlaylist(true); }}
@@ -715,7 +768,12 @@ export default function App() {
                             onViewQueue={() => setShowQueueModal(true)}
                           />
                         )} />
-                      {!query && view !== 'liked' && view !== 'most-played' && <AlphaScrollBar songs={filtered} accentColor={accentColor} listRef={listRef} />}
+                      {/* Feature (Liked Songs A-Z index): previously excluded
+                          `view === 'liked'` -- Liked Songs is already sorted
+                          alphabetically (it's filtered straight out of the
+                          globally alphabetical `songs` array), so the same
+                          jump-to-letter bar now applies there too. */}
+                      {!query && view !== 'most-played' && <AlphaScrollBar songs={alphaSongs} accentColor={accentColor} listRef={listRef} indexOffset={alphaOffset} />}
                     </>
                   )}
                 </div>
