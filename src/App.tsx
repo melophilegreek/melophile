@@ -230,7 +230,15 @@ export default function App() {
       const songRows: LibraryRow[] = filtered.map((song, i) => ({ kind: 'song', song, displayIndex: i }));
       return { rows: songRows, alphaSongs: filtered, alphaOffset: 0 };
     }
-    const pinned = filtered.filter((s) => pinnedIds.has(s.id));
+    // FIX (pin order): don't derive the pinned list by filtering `filtered`
+    // -- that just keeps them in whatever (alphabetical) order they already
+    // had. Instead walk `pinnedIds` itself, whose iteration order is pin
+    // order (oldest pin first, see db.ts's getPinnedIds/setPinned), and
+    // look each song up. That's what makes "first pinned song is first".
+    const filteredById = new Map(filtered.map((s) => [s.id, s] as const));
+    const pinned = Array.from(pinnedIds)
+      .map((id) => filteredById.get(id))
+      .filter((s): s is Song => s !== undefined);
     const unpinned = filtered.filter((s) => !pinnedIds.has(s.id));
     const ordered = [...pinned, ...unpinned];
     const songRows: LibraryRow[] = ordered.map((song, i) => ({ kind: 'song', song, displayIndex: i }));
