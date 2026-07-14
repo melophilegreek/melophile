@@ -100,8 +100,22 @@ export async function getLikedIds(): Promise<Set<string>> { const db = await get
 export async function setLiked(songId: string, liked: boolean): Promise<void> { const db = await getDB(); if (liked) await db.put('liked-songs', songId, songId); else await db.delete('liked-songs', songId); }
 
 // ── Pinned Songs ──────────────────────────────────────────────────────────────
-export async function getPinnedIds(): Promise<Set<string>> { const db = await getDB(); const keys = await db.getAllKeys('pinned-songs'); return new Set(keys as string[]); }
-export async function setPinned(songId: string, pinned: boolean): Promise<void> { const db = await getDB(); if (pinned) await db.put('pinned-songs', songId, songId); else await db.delete('pinned-songs', songId); }
+// FIX (pin order): the store's value used to just be the songId itself, so
+// the only "order" available on reload was IndexedDB's default
+// ascending-by-key sort -- which isn't "first pinned first" at all. The
+// value is now the timestamp the song was pinned at, and getPinnedIds sorts
+// by that before building the Set, so the Set's iteration order (which
+// App.tsx relies on to lay out the Pinned section) reflects actual pin
+// order, oldest pin first, and survives a reload.
+export async function getPinnedIds(): Promise<Set<string>> {
+  const db = await getDB();
+  const keys = (await db.getAllKeys('pinned-songs')) as string[];
+  const values = (await db.getAll('pinned-songs')) as number[];
+  const withOrder = keys.map((key, i) => ({ key, order: values[i] ?? 0 }));
+  withOrder.sort((a, b) => a.order - b.order);
+  return new Set(withOrder.map((e) => e.key));
+}
+export async function setPinned(songId: string, pinned: boolean): Promise<void> { const db = await getDB(); if (pinned) await db.put('pinned-songs', Date.now(), songId); else await db.delete('pinned-songs', songId); }
 
 // ── Playlists ─────────────────────────────────────────────────────────────────
 export async function getPlaylists(): Promise<Playlist[]> { const db = await getDB(); const all = await db.getAll('playlists'); return all.sort((a, b) => a.createdAt - b.createdAt); }
