@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { Heart, Play, Pencil, ListMusic, FolderPlus, X, ListPlus, Repeat, Trash2, MoreVertical, Copy } from 'lucide-react';
+import { Heart, Play, Pencil, ListMusic, FolderPlus, X, ListPlus, Repeat, Trash2, MoreVertical, Copy, Pin, PinOff } from 'lucide-react';
 import type { Playlist, Song } from '../types';
 import { initialFor, placeholderBackground } from '../lib/artPlaceholder';
 
@@ -73,9 +73,11 @@ interface TrackMenuProps {
   song: Song;
   playlists: Playlist[];
   isLiked: boolean;
+  isPinned: boolean;
   accentColor: string;
   onClose: () => void;
   onLike: (song: Song) => void;
+  onPin: (song: Song) => void;
   onEditArt: (song: Song) => void;
   onAddToPlaylist: (song: Song, playlistId: string) => void;
   onCreatePlaylist: (song: Song) => void;
@@ -91,8 +93,8 @@ interface TrackMenuProps {
 }
 
 function TrackMenu({
-  x, y, song, playlists, isLiked, accentColor, onClose,
-  onLike, onEditArt, onAddToPlaylist, onCreatePlaylist, onRemoveFromPlaylist, onRequestDelete, returnFocusRef,
+  x, y, song, playlists, isLiked, isPinned, accentColor, onClose,
+  onLike, onPin, onEditArt, onAddToPlaylist, onCreatePlaylist, onRemoveFromPlaylist, onRequestDelete, returnFocusRef,
   onQueue, onViewQueue,
 }: TrackMenuProps) {
   const ref = useRef<HTMLDivElement>(null);
@@ -143,6 +145,10 @@ function TrackMenu({
         <button role="menuitem" tabIndex={-1} onClick={() => { onLike(song); close(false); }} className={itemClass}>
           <Heart size={14} fill={isLiked ? accentColor : 'none'} style={{ color: isLiked ? accentColor : 'rgba(255,255,255,0.6)' }} />
           {isLiked ? 'Unlike' : 'Like'}
+        </button>
+        <button role="menuitem" tabIndex={-1} onClick={() => { onPin(song); close(false); }} className={itemClass}>
+          {isPinned ? <PinOff size={14} style={{ color: accentColor }} /> : <Pin size={14} className="text-white/50" />}
+          {isPinned ? 'Unpin Song' : 'Pin Song'}
         </button>
         <button role="menuitem" tabIndex={-1} onClick={() => { onEditArt(song); close(false); }} className={itemClass}>
           <Pencil size={14} className="text-white/50" /> Edit album art
@@ -231,6 +237,9 @@ interface SongRowProps {
   isCurrent: boolean;
   isPlaying: boolean;
   isLiked: boolean;
+  /** Pin/Unpin feature: true when this song is pinned. Drives the small pin
+   *  badge on the row and the Pin/Unpin toggle wording in the overflow menu. */
+  isPinned: boolean;
   isQueued: boolean;
   accentColor: string;
   playlists: Playlist[];
@@ -242,6 +251,7 @@ interface SongRowProps {
   isDuplicateTitleArtist?: boolean;
   onPlay: (song: Song) => void;
   onLike: (song: Song) => void;
+  onPin: (song: Song) => void;
   onQueue: (song: Song) => void;
   onAddToPlaylist: (song: Song, playlistId: string) => void;
   onCreatePlaylist: (song: Song) => void;
@@ -253,8 +263,8 @@ interface SongRowProps {
 }
 
 export function SongRow({
-  song, index, isCurrent, isPlaying, isLiked, isQueued, accentColor, playlists, isInPlaylist, showPlayCount, isDuplicateTitleArtist,
-  onPlay, onLike, onQueue, onAddToPlaylist, onCreatePlaylist, onEditArt, onDelete, onRemoveFromPlaylist, onViewQueue,
+  song, index, isCurrent, isPlaying, isLiked, isPinned, isQueued, accentColor, playlists, isInPlaylist, showPlayCount, isDuplicateTitleArtist,
+  onPlay, onLike, onPin, onQueue, onAddToPlaylist, onCreatePlaylist, onEditArt, onDelete, onRemoveFromPlaylist, onViewQueue,
 }: SongRowProps) {
   const [trackMenu, setTrackMenu] = useState<{ x: number; y: number; keyboardTriggered: boolean } | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -383,6 +393,15 @@ export function SongRow({
             </div>
           )}
 
+          {/* Pinned indicator — non-interactive; Pin/Unpin itself lives in the
+              overflow menu below. Shown before the Liked heart so a pinned
+              song is identifiable at a glance regardless of its liked state. */}
+          {isPinned && (
+            <div className="shrink-0 mr-1" aria-label="Pinned" title="Pinned">
+              <Pin size={14} fill={accentColor} style={{ color: accentColor }} />
+            </div>
+          )}
+
           {/* Liked indicator — non-interactive; Like/Unlike itself now lives in the overflow menu below, so this preserves at-a-glance liked status without an always-visible button */}
           {isLiked && (
             <div className="shrink-0 mr-1" aria-label="Liked" title="Liked">
@@ -426,9 +445,10 @@ export function SongRow({
       {trackMenu && (
         <TrackMenu
           x={trackMenu.x} y={trackMenu.y}
-          song={song} playlists={playlists} isLiked={isLiked} accentColor={accentColor}
+          song={song} playlists={playlists} isLiked={isLiked} isPinned={isPinned} accentColor={accentColor}
           onClose={() => setTrackMenu(null)}
           onLike={onLike}
+          onPin={onPin}
           onEditArt={onEditArt}
           onAddToPlaylist={onAddToPlaylist}
           onCreatePlaylist={onCreatePlaylist}
