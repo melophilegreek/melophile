@@ -34,18 +34,6 @@
      do. Harmless everywhere else. */
   .overflow-y-auto, .overflow-auto { -webkit-overflow-scrolling: touch; }
 
-  /* FEATURE (mobile scrollbar): VirtualList renders its own draggable,
-     properly-sized (6-8px thumb / 44px touch target) scrollbar overlay for
-     touch screens (see VirtualList.tsx), so the tiny native overlay
-     scrollbar -- which can't be resized or given a real touch target via
-     CSS on iOS/Android -- is suppressed on narrow/mobile layouts to avoid
-     showing two scroll indicators at once. Desktop is untouched: it keeps
-     the existing theme-styled 6px ::-webkit-scrollbar above.  */
-  @media (max-width: 767px) {
-    .no-native-scrollbar-mobile::-webkit-scrollbar { width: 0; height: 0; }
-    .no-native-scrollbar-mobile { scrollbar-width: none; }
-  }
-
   /* Selected text picks up the accent color instead of the browser default
      blue, so it stays consistent with the rest of the theme. */
   ::selection { background: color-mix(in srgb, var(--accent-color) 55%, transparent); color: #fff; }
