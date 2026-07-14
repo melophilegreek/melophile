@@ -1,12 +1,28 @@
-import { useRef, useState, useEffect, useCallback, forwardRef, useImperativeHandle } from 'react';
+import { useRef, useState, useEffect, useCallback, useMemo, forwardRef, useImperativeHandle } from 'react';
 import { ROW_HEIGHT } from '../types';
 
 const OVERSCAN = 8;
+// Accessibility floor for the mobile scrollbar's drag handle -- see the
+// "Improve Scrollbar Size and Smoothness for Mobile" feature. 44px is the
+// standard minimum touch-target dimension (WCAG 2.5.5 / iOS & Material
+// guidance), used for BOTH the thumb's height and the width of its
+// (mostly-invisible) hit area below.
+const MIN_TOUCH_TARGET = 44;
+// Visual width of the thumb pill itself -- 8px, matching the feature's
+// "6-8dp" ask. It sits centered inside the wider 44px touch-target strip.
+const THUMB_VISUAL_WIDTH = 8;
 
 interface Props<T> {
   items: T[];
   renderItem: (item: T, index: number) => React.ReactNode;
   className?: string;
+  /**
+   * Per-item pixel height. Optional -- defaults to the fixed ROW_HEIGHT
+   * (the original, single-height-list behavior). Pass this when the list
+   * mixes row types of different heights, e.g. the "Pinned" section header
+   * row alongside regular ROW_HEIGHT song rows.
+   */
+  getItemHeight?: (item: T, index: number) => number;
 }
 
 export interface VirtualListHandle {
@@ -14,8 +30,22 @@ export interface VirtualListHandle {
   getScrollTop: () => number;
 }
 
+// Largest index i (0 <= i <= offsets.length - 2) such that offsets[i] <= y.
+// offsets has items.length + 1 entries (a leading 0 and a running total),
+// so this returns a valid item index for any y within [0, totalHeight].
+function findRowIndex(offsets: number[], y: number): number {
+  let lo = 0;
+  let hi = offsets.length - 2;
+  if (hi < 0) return 0;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1;
+    if (offsets[mid] <= y) lo = mid; else hi = mid - 1;
+  }
+  return lo;
+}
+
 function VirtualListInner<T>(
-  { items, renderItem, className }: Props<T>,
+  { items, renderItem, className, getItemHeight }: Props<T>,
   ref: React.Ref<VirtualListHandle>,
 ) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -35,30 +65,115 @@ function VirtualListInner<T>(
     if (containerRef.current) setScrollTop(containerRef.current.scrollTop);
   }, []);
 
+  // Running-total offsets array (length items.length + 1). When every row
+  // is the fixed ROW_HEIGHT (no getItemHeight passed) this is just
+  // `[0, ROW_HEIGHT, 2*ROW_HEIGHT, ...]`, so behavior for existing callers
+  // is unchanged.
+  const offsets = useMemo(() => {
+    const o = new Array(items.length + 1);
+    o[0] = 0;
+    for (let i = 0; i < items.length; i++) {
+      const h = getItemHeight ? getItemHeight(items[i], i) : ROW_HEIGHT;
+      o[i + 1] = o[i] + h;
+    }
+    return o;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [items, getItemHeight]);
+
   useImperativeHandle(ref, () => ({
     scrollToIndex(index: number) {
       const el = containerRef.current;
-      if (el) el.scrollTop = index * ROW_HEIGHT;
+      if (!el) return;
+      const clamped = Math.max(0, Math.min(index, offsets.length - 2));
+      el.scrollTop = offsets[clamped] ?? 0;
     },
     getScrollTop() { return containerRef.current?.scrollTop ?? 0; },
-  }));
+  }), [offsets]);
 
-  const totalHeight = items.length * ROW_HEIGHT;
-  const startIdx = Math.max(0, Math.floor(scrollTop / ROW_HEIGHT) - OVERSCAN);
-  const endIdx = Math.min(items.length, Math.ceil((scrollTop + containerHeight) / ROW_HEIGHT) + OVERSCAN);
+  const totalHeight = offsets[offsets.length - 1] ?? 0;
+  const startIdx = Math.max(0, findRowIndex(offsets, scrollTop) - OVERSCAN);
+  const endIdx = Math.min(items.length, findRowIndex(offsets, scrollTop + containerHeight) + 1 + OVERSCAN);
   const visibleItems = items.slice(startIdx, endIdx);
 
+  // ── Custom draggable scrollbar thumb (mobile only -- see index.css /
+  // `.no-native-scrollbar-mobile`, which suppresses the tiny native overlay
+  // scrollbar under `md:hidden` so this doesn't render alongside it).
+  // Native touch scrollbars on iOS/Android can't be resized or given a
+  // reliable touch target via CSS, so a real widget is the only way to hit
+  // the "6-8dp thumb / >=44dp touch target" requirement on touch devices.
+  // Desktop keeps the existing native, theme-styled ::-webkit-scrollbar.
+  const dragState = useRef<{ startY: number; startScrollTop: number } | null>(null);
+  const [dragging, setDragging] = useState(false);
+  const scrollable = totalHeight > containerHeight;
+  const thumbHeight = scrollable
+    ? Math.min(containerHeight, Math.max(MIN_TOUCH_TARGET, (containerHeight / totalHeight) * containerHeight))
+    : 0;
+  const scrollableTrack = containerHeight - thumbHeight;
+  const scrollableContent = totalHeight - containerHeight;
+  const thumbTop = scrollable && scrollableContent > 0
+    ? (scrollTop / scrollableContent) * scrollableTrack
+    : 0;
+
+  const onThumbPointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    (e.currentTarget as Element).setPointerCapture(e.pointerId);
+    dragState.current = { startY: e.clientY, startScrollTop: containerRef.current?.scrollTop ?? 0 };
+    setDragging(true);
+  }, []);
+  const onThumbPointerMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    if (!dragState.current || !containerRef.current || scrollableTrack <= 0 || scrollableContent <= 0) return;
+    const dy = e.clientY - dragState.current.startY;
+    const deltaScroll = (dy / scrollableTrack) * scrollableContent;
+    containerRef.current.scrollTop = Math.max(0, Math.min(scrollableContent, dragState.current.startScrollTop + deltaScroll));
+  }, [scrollableTrack, scrollableContent]);
+  const onThumbPointerUp = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    (e.currentTarget as Element).releasePointerCapture(e.pointerId);
+    dragState.current = null;
+    setDragging(false);
+  }, []);
+
   return (
-    <div ref={containerRef} className={`overflow-y-auto ${className ?? ''}`} onScroll={handleScroll}>
-      <div style={{ height: totalHeight, position: 'relative' }}>
-        <div style={{ position: 'absolute', top: startIdx * ROW_HEIGHT, left: 0, right: 0 }}>
-          {visibleItems.map((item, i) => (
-            <div key={startIdx + i} style={{ height: ROW_HEIGHT }}>
-              {renderItem(item, startIdx + i)}
-            </div>
-          ))}
+    <div className="relative h-full">
+      <div ref={containerRef} className={`overflow-y-auto no-native-scrollbar-mobile ${className ?? ''}`} onScroll={handleScroll}>
+        <div style={{ height: totalHeight, position: 'relative' }}>
+          <div style={{ position: 'absolute', top: offsets[startIdx] ?? 0, left: 0, right: 0 }}>
+            {visibleItems.map((item, i) => {
+              const idx = startIdx + i;
+              const h = getItemHeight ? getItemHeight(item, idx) : ROW_HEIGHT;
+              return (
+                <div key={idx} style={{ height: h }}>
+                  {renderItem(item, idx)}
+                </div>
+              );
+            })}
+          </div>
         </div>
       </div>
+
+      {scrollable && (
+        <div
+          className="md:hidden absolute top-0 right-0 flex justify-center touch-none"
+          style={{ width: MIN_TOUCH_TARGET, height: thumbHeight, transform: `translateY(${thumbTop}px)` }}
+          onPointerDown={onThumbPointerDown}
+          onPointerMove={onThumbPointerMove}
+          onPointerUp={onThumbPointerUp}
+          onPointerCancel={onThumbPointerUp}
+          role="scrollbar"
+          aria-orientation="vertical"
+          aria-valuenow={Math.round((scrollTop / Math.max(scrollableContent, 1)) * 100)}
+        >
+          <div
+            className="rounded-full transition-opacity"
+            style={{
+              width: THUMB_VISUAL_WIDTH,
+              height: '100%',
+              background: dragging ? 'color-mix(in srgb, var(--accent-color) 65%, rgba(255,255,255,0.35))' : 'rgba(255,255,255,0.28)',
+              opacity: dragging ? 1 : 0.9,
+            }}
+          />
+        </div>
+      )}
     </div>
   );
 }
